@@ -7,6 +7,8 @@ process.on("unhandledRejection", (reason, promise) => {
 });
 require("dotenv").config();
 
+console.log("iniciando servidor...");
+
 const express = require("express");
 const cors = require("cors");
 
@@ -17,7 +19,7 @@ app.use(express.json());
 app.use(cors());
 app.use(rotas);
 
-app.use((err, req, res, next) => {
+app.use((err, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
     return res
       .status(400)
