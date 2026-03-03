@@ -33,13 +33,23 @@ const atualizarStatusCliente = async (clienteId) => {
 };
 
 const cadastrarCobranca = async (req, res) => {
-  const { descricao, status, valor, vencimento } = req.body;
-  const { id } = req.params; // id do cliente na rota /cobrancas/:id
+  const { descricao, status, valor, vencimento, cliente_id } = req.body;
+  const idCliente = req.params.id || cliente_id;
 
   try {
-    await cadastrarCobrancaSchema.validate(req.body);
+    await cadastrarCobrancaSchema.validate({
+      descricao,
+      status,
+      valor,
+      vencimento,
+      cliente_id: idCliente,
+    });
 
-    const cliente = await knex("clientes").where({ id }).first();
+    if (!idCliente) {
+      return res.status(400).json("Cliente não informado");
+    }
+
+    const cliente = await knex("clientes").where({ id: idCliente }).first();
     if (!cliente) {
       return res.status(404).json("Cliente não encontrado");
     }
@@ -54,7 +64,7 @@ const cadastrarCobranca = async (req, res) => {
     const [cadastroCobranca] = await knex("cobranca")
       .insert({
         descricao,
-        cliente_id: id,
+        cliente_id: idCliente,
         status: statusFinal,
         valor,
         vencimento: vencimentoFinal,
@@ -65,7 +75,7 @@ const cadastrarCobranca = async (req, res) => {
       return res.status(400).json("Não foi possível cadastrar a cobrança");
     }
 
-    await atualizarStatusCliente(id);
+    await atualizarStatusCliente(idCliente);
 
     return res.status(201).json(cadastroCobranca);
   } catch (error) {

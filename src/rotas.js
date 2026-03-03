@@ -10,7 +10,7 @@ const { validarUsuarioLogado } = require("./filtros/filtroLogin");
 const rotas = express.Router();
 
 rotas.get("/", (req, res) => {
-	return res.status(200).json({ status: "ok" });
+    return res.status(200).json({ status: "ok" });
 });
 
 rotas.post("/usuario", usuarios.cadastrarUsuario);
@@ -23,6 +23,8 @@ rotas.get("/cobrancas/busca", cobrancas.buscarCobrancas);
 rotas.get("/clientes/busca", clientes.buscarCliente);
 
 rotas.post("/clientes", clientes.cadastrarCliente);
+
+rotas.post("/cobrancas/:id", cobrancas.cadastrarCobranca);
 rotas.post("/cobrancas", cobrancas.cadastrarCobranca);
 
 rotas.get("/clientes", clientes.pegarClientes);
