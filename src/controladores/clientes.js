@@ -1,60 +1,66 @@
 const knex = require("../bancodedados/conexao");
 const cadastroClienteSchema = require("../validacoes/cadastroClienteSchema");
 
+const sanitizeDigits = (value) =>
+  value === undefined || value === null ? "" : String(value).replace(/\D/g, "");
+
+const parsePagination = (query) => {
+  const limitParsed = Number.parseInt(query.limit, 10);
+  const offsetParsed = Number.parseInt(query.offset, 10);
+
+  const limit = Number.isInteger(limitParsed) && limitParsed > 0 ? limitParsed : 1000;
+  const offset = Number.isInteger(offsetParsed) && offsetParsed >= 0 ? offsetParsed : 0;
+
+  return { limit, offset };
+};
+
+const atualizarStatusClientePorId = async (id) => {
+  const existeVencida = await knex("cobranca")
+    .where({ cliente_id: id, status: "vencida" })
+    .first();
+
+  await knex("clientes")
+    .where({ id })
+    .update({ status: !!existeVencida });
+};
+
 const cadastrarCliente = async (req, res) => {
-  const {
-    nome_cliente,
-    email,
-    cpf,
-    telefone,
-    cep,
-    logradouro,
-    complemento,
-    bairro,
-    cidade,
-    estado,
-  } = req.body;
-
   try {
-    if (
-      cpf.split("").some((numero) => isNaN(numero)) ||
-      telefone.split("").some((numero) => isNaN(numero)) ||
-      (cep && cep.split("").some((numero) => isNaN(numero)))
-    ) {
-      return res.status(400).json("Este campo só aceita números.");
-    }
-    await cadastroClienteSchema.validate(req.body);
+    const payload = {
+      ...req.body,
+      cpf: sanitizeDigits(req.body.cpf),
+      telefone: sanitizeDigits(req.body.telefone),
+      cep: sanitizeDigits(req.body.cep),
+    };
 
-    if (nome_cliente.length < 0) {
-      return res
-        .status(401)
-        .json("O campo nome deve ser preenchido com um nome válido");
+    await cadastroClienteSchema.validate(payload);
+
+    if (!payload.nome_cliente || payload.nome_cliente.trim().length < 2) {
+      return res.status(400).json("O campo nome deve ser preenchido com um nome válido");
     }
 
-    const verificarEmail = await knex("clientes").where({ email }).first();
-
+    const verificarEmail = await knex("clientes").where({ email: payload.email }).first();
     if (verificarEmail) {
-      return res.status(401).json("E-mail já cadastrado");
+      return res.status(409).json("E-mail já cadastrado");
     }
 
-    const verificarCpf = await knex("clientes").where({ cpf }).first();
-
+    const verificarCpf = await knex("clientes").where({ cpf: payload.cpf }).first();
     if (verificarCpf) {
-      return res.status(400).json("Cpf já cadastrado");
+      return res.status(409).json("Cpf já cadastrado");
     }
 
-    const usuarioCadastrado = await knex("clientes")
+    const [usuarioCadastrado] = await knex("clientes")
       .insert({
-        nome_cliente,
-        email,
-        cpf,
-        telefone,
-        cep,
-        logradouro,
-        complemento,
-        bairro,
-        cidade,
-        estado,
+        nome_cliente: payload.nome_cliente,
+        email: payload.email,
+        cpf: payload.cpf,
+        telefone: payload.telefone,
+        cep: payload.cep || null,
+        logradouro: payload.logradouro || null,
+        complemento: payload.complemento || null,
+        bairro: payload.bairro || null,
+        cidade: payload.cidade || null,
+        estado: payload.estado || null,
       })
       .returning("*");
 
@@ -62,153 +68,113 @@ const cadastrarCliente = async (req, res) => {
       return res.status(400).json("Não foi possível realizar cadastro");
     }
 
-    return res.status(200).json(usuarioCadastrado[0]);
+    return res.status(201).json(usuarioCadastrado);
   } catch (error) {
     return res.status(400).json(error.message);
   }
 };
+
 const pegarClientes = async (req, res) => {
-  const { offset, limit } = req.query;
   try {
-    const quantidadeClientes = await knex("clientes").count();
-    const clientes = await knex
+    const { limit, offset } = parsePagination(req.query);
+
+    const quantidadeClientes = await knex("clientes").count({ count: "*" });
+    const clientes = await knex("clientes").select("*").limit(limit).offset(offset);
+
+    for (const cliente of clientes) {
+      await atualizarStatusClientePorId(cliente.id);
+    }
+
+    const clientesAtualizados = await knex("clientes")
       .select("*")
-      .from("clientes")
       .limit(limit)
       .offset(offset);
-    const cobrancasVencidas = await knex("cobranca").where("status", "vencida");
-    for (let cliente of clientes) {
-      if (
-        cobrancasVencidas.find((cobranca) => cobranca.cliente_id === cliente.id)
-      ) {
-        const clienteAtualizado = await knex("clientes")
-          .where("id", cliente.id)
-          .update("status", false);
-      } else {
-        const clienteAtualizado = await knex("clientes")
-          .where("id", cliente.id)
-          .update("status", true);
-      }
-    }
 
-    return res.status(200).json({ quantidadeClientes, clientes });
+    return res.status(200).json({ quantidadeClientes, clientes: clientesAtualizados });
   } catch (error) {
     return res.status(400).json(error.message);
   }
 };
+
 const atualizarCliente = async (req, res) => {
-  const {
-    nome_cliente,
-    email,
-    cpf,
-    telefone,
-    cep,
-    logradouro,
-    complemento,
-    bairro,
-    cidade,
-    estado,
-  } = req.body;
-
-  const { id } = req.params;
-
   try {
-    if (
-      cpf.split("").some((numero) => isNaN(numero)) ||
-      telefone.split("").some((numero) => isNaN(numero)) ||
-      (cep && cep.split("").some((numero) => isNaN(numero)))
-    ) {
-      return res.status(400).json("Este campo só aceita números.");
-    }
-    await cadastroClienteSchema.validate(req.body);
+    const { id } = req.params;
 
-    const clienteEmail = await knex("clientes").where({ email }).first();
-    const clienteCpf = await knex("clientes").where({ cpf }).first();
+    const payload = {
+      ...req.body,
+      cpf: sanitizeDigits(req.body.cpf),
+      telefone: sanitizeDigits(req.body.telefone),
+      cep: sanitizeDigits(req.body.cep),
+    };
 
-    if (clienteEmail != undefined && id != clienteEmail?.id) {
-      return res.status(400).json("Email já cadastrado para outro cliente");
-    }
+    await cadastroClienteSchema.validate(payload);
 
-    if (clienteCpf != undefined && id != clienteCpf?.id) {
-      return res.status(400).json("Cpf já cadastrado para outro cliente");
+    const clienteEmail = await knex("clientes").where({ email: payload.email }).first();
+    const clienteCpf = await knex("clientes").where({ cpf: payload.cpf }).first();
+
+    if (clienteEmail && String(id) !== String(clienteEmail.id)) {
+      return res.status(409).json("Email já cadastrado para outro cliente");
     }
 
-    const atualizarCliente = await knex("clientes")
+    if (clienteCpf && String(id) !== String(clienteCpf.id)) {
+      return res.status(409).json("Cpf já cadastrado para outro cliente");
+    }
+
+    const [clienteAtualizado] = await knex("clientes")
       .where({ id })
       .update({
-        nome_cliente,
-        email,
-        cpf,
-        telefone,
-        cep,
-        logradouro,
-        complemento,
-        bairro,
-        cidade,
-        estado,
+        nome_cliente: payload.nome_cliente,
+        email: payload.email,
+        cpf: payload.cpf,
+        telefone: payload.telefone,
+        cep: payload.cep || null,
+        logradouro: payload.logradouro || null,
+        complemento: payload.complemento || null,
+        bairro: payload.bairro || null,
+        cidade: payload.cidade || null,
+        estado: payload.estado || null,
       })
       .returning("*");
 
-    const cobrancasVencidas = await knex("cobranca").where("status", "vencida");
-    if (cobrancasVencidas.find((cobranca) => cobranca.cliente_id === id)) {
-      const clienteAtualizado = await knex("clientes")
-        .where("id", id)
-        .update("status", false);
-    } else {
-      const clienteAtualizado = await knex("clientes")
-        .where("id", id)
-        .update("status", true);
-    }
-
-    if (!atualizarCliente) {
+    if (!clienteAtualizado) {
       return res.status(400).json("Não foi possível atualizar o cliente");
     }
 
-    return res.status(200).json(atualizarCliente);
+    await atualizarStatusClientePorId(id);
+
+    return res.status(200).json(clienteAtualizado);
   } catch (error) {
     return res.status(400).json(error.message);
   }
 };
 
 const obterCliente = async (req, res) => {
-  const { id } = req.params;
-
   try {
-    const cliente = await knex("clientes").where({ id }).first();
+    const { id } = req.params;
 
+    const cliente = await knex("clientes").where({ id }).first();
     if (!cliente) {
       return res.status(404).json("Não foi possível encontrar o cliente");
     }
 
-    const cobrancasVencidas = await knex("cobranca").where("status", "vencida");
-    if (cobrancasVencidas.find((cobranca) => cobranca.cliente_id === id)) {
-      const clienteAtualizado = await knex("clientes")
-        .where({ id })
-        .update("status", false);
-    } else {
-      const clienteAtualizado = await knex("clientes")
-        .where({ id })
-        .update("status", true);
-    }
+    await atualizarStatusClientePorId(id);
 
-    return res.status(200).json(cliente);
+    const clienteAtualizado = await knex("clientes").where({ id }).first();
+    return res.status(200).json(clienteAtualizado);
   } catch (error) {
     return res.status(400).json(error.message);
   }
 };
 
 const buscarCliente = async (req, res) => {
-  const { busca } = req.query;
-
   try {
-    const buscaCliente = await knex("clientes")
-      .whereRaw("email ILIKE ?", `%${busca}%`)
-      .orWhereRaw("nome_cliente ILIKE ?", `%${busca}%`)
-      .orWhereRaw("cpf::text ILIKE ?", `%${busca}%`);
+    const { busca = "" } = req.query;
 
-    if (!buscaCliente) {
-      return res.status(400).json(buscaCliente);
-    }
+    const buscaCliente = await knex("clientes")
+      .whereRaw("email ILIKE ?", [`%${busca}%`])
+      .orWhereRaw("nome_cliente ILIKE ?", [`%${busca}%`])
+      .orWhereRaw("cpf::text ILIKE ?", [`%${sanitizeDigits(busca)}%`]);
+
     return res.status(200).json(buscaCliente);
   } catch (error) {
     return res.status(400).json(error.message);

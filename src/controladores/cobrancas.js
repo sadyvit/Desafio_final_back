@@ -1,81 +1,92 @@
 const knex = require("../bancodedados/conexao");
 const cadastrarCobrancaSchema = require("../validacoes/cadastrarCobrancaSchema");
 
+const parsePagination = (query) => {
+  const limitParsed = Number.parseInt(query.limit, 10);
+  const offsetParsed = Number.parseInt(query.offset, 10);
+
+  const limit = Number.isInteger(limitParsed) && limitParsed > 0 ? limitParsed : 1000;
+  const offset = Number.isInteger(offsetParsed) && offsetParsed >= 0 ? offsetParsed : 0;
+
+  return { limit, offset };
+};
+
+const toEndOfDay = (dateString) => {
+  const [year, month, day] = String(dateString).split("-").map(Number);
+  return new Date(year, month - 1, day, 23, 59, 59);
+};
+
+const normalizeStatusByDueDate = (vencimento, status) => {
+  const vencimentoDate = toEndOfDay(vencimento);
+  if (vencimentoDate < new Date() && status !== "paga") return "vencida";
+  return status;
+};
+
+const atualizarStatusCliente = async (clienteId) => {
+  const existeVencida = await knex("cobranca")
+    .where({ cliente_id: clienteId, status: "vencida" })
+    .first();
+
+  await knex("clientes")
+    .where({ id: clienteId })
+    .update({ status: !!existeVencida });
+};
+
 const cadastrarCobranca = async (req, res) => {
   const { descricao, status, valor, vencimento } = req.body;
-  const { id } = req.params;
+  const { id } = req.params; // id do cliente na rota /cobrancas/:id
 
   try {
     await cadastrarCobrancaSchema.validate(req.body);
-    const cliente = await knex("clientes").where({ id }).first();
 
+    const cliente = await knex("clientes").where({ id }).first();
     if (!cliente) {
-      return res.status(404).json("cliente não encontrado");
+      return res.status(404).json("Cliente não encontrado");
     }
 
-    const cadastroCobranca = await knex("cobranca")
-      .where({ id })
+    if (isNaN(Number(valor))) {
+      return res.status(400).json("Este campo só aceita números.");
+    }
+
+    const statusFinal = normalizeStatusByDueDate(vencimento, status);
+    const vencimentoFinal = toEndOfDay(vencimento);
+
+    const [cadastroCobranca] = await knex("cobranca")
       .insert({
         descricao,
         cliente_id: id,
-        status:
-          new Date(
-            vencimento.split("-")[0],
-            vencimento.split("-")[1] - 1,
-            vencimento.split("-")[2],
-            23,
-            59,
-            59
-          ) < new Date() && status !== "paga"
-            ? "vencida"
-            : status,
+        status: statusFinal,
         valor,
-        vencimento: new Date(
-          vencimento.split("-")[0],
-          vencimento.split("-")[1] - 1,
-          vencimento.split("-")[2],
-          23,
-          59,
-          59
-        ),
+        vencimento: vencimentoFinal,
       })
       .returning("*");
-
-    let statusCliente =
-      new Date(
-        vencimento.split("-")[0],
-        vencimento.split("-")[1] - 1,
-        vencimento.split("-")[2],
-        23,
-        59,
-        59
-      ) < new Date() && status !== "paga"
-        ? false
-        : true;
-
-    if (!statusCliente) {
-      const clienteAtualizado = await knex("clientes")
-        .update({ status: statusCliente })
-        .where({ id });
-    }
 
     if (!cadastroCobranca) {
       return res.status(400).json("Não foi possível cadastrar a cobrança");
     }
 
-    return res.status(200).json(cadastroCobranca);
+    await atualizarStatusCliente(id);
+
+    return res.status(201).json(cadastroCobranca);
   } catch (error) {
     return res.status(400).json(error.message);
   }
 };
 
 const listarCobrancas = async (req, res) => {
-  const { offset, limit } = req.query;
   try {
-    const quantidadeCobrancas = await knex("cobranca").count();
-    const cobrancas = await knex
+    const { limit, offset } = parsePagination(req.query);
+
+    await knex("cobranca")
+      .where("vencimento", "<", new Date())
+      .andWhere("status", "pendente")
+      .update({ status: "vencida" });
+
+    const quantidadeCobrancas = await knex("cobranca").count({ count: "*" });
+
+    const cobrancas = await knex("clientes")
       .select(
-        "nome_cliente",
+        "clientes.nome_cliente",
         "cobranca.id",
         "cobranca.cliente_id",
         "cobranca.valor",
@@ -83,19 +94,9 @@ const listarCobrancas = async (req, res) => {
         "cobranca.status",
         "cobranca.descricao"
       )
-      .from("clientes")
       .innerJoin("cobranca", "clientes.id", "cobranca.cliente_id")
       .limit(limit)
       .offset(offset);
-
-    if (!cobrancas.length) {
-      return res.status(400).json();
-    }
-
-    const atualizarCobrancas = await knex("cobranca")
-      .where("vencimento", "<", new Date())
-      .andWhere("status", "pendente")
-      .update({ status: "vencida" });
 
     return res.status(200).json({ quantidadeCobrancas, cobrancas });
   } catch (error) {
@@ -104,70 +105,51 @@ const listarCobrancas = async (req, res) => {
 };
 
 const obterCobranca = async (req, res) => {
-  const { id } = req.params;
+  const { id } = req.params; // id do cliente
 
   try {
-    const cobranca = await knex("cobranca").where({ cliente_id: id });
-
-    if (!cobranca) {
-      return res
-        .status(404)
-        .json("Não foi possível encontrar as cobranças do cliente");
-    }
-
-    return res.status(200).json(cobranca);
+    const cobrancas = await knex("cobranca").where({ cliente_id: id });
+    return res.status(200).json(cobrancas);
   } catch (error) {
     return res.status(400).json(error.message);
   }
 };
 
 const excluirCobranca = async (req, res) => {
-  const { id } = req.params;
+  const { id } = req.params; // id da cobrança
 
   try {
     const cobranca = await knex("cobranca").where({ id }).first();
-
-    console.log(cobranca);
-
     if (!cobranca) {
       return res.status(404).json("Não foi possível encontrar a cobrança");
     }
 
-    if (cobranca.status === "pago" || cobranca.status === "vencida") {
+    if (cobranca.status === "paga" || cobranca.status === "vencida") {
       return res
         .status(400)
         .json("Cobranças pagas ou vencidas não podem ser excluídas");
     }
-    const exclusaoCobranca = await knex("cobranca").del().where("id", id);
 
-    const cobrancasVencidas = await knex("cobranca").where("status", "vencida");
-    if (cobrancasVencidas.find((c) => c.cliente_id === cobranca.cliente_id)) {
-      const clienteAtualizado = await knex("clientes")
-        .where({ id })
-        .update("status", false);
-    } else {
-      const clienteAtualizado = await knex("clientes")
-        .where({ id })
-        .update("status", true);
-    }
-
+    const exclusaoCobranca = await knex("cobranca").where({ id }).del();
     if (!exclusaoCobranca) {
       return res.status(400).json("Não foi possível excluir a cobrança");
     }
-    return res.status(200).json(exclusaoCobranca);
+
+    await atualizarStatusCliente(cobranca.cliente_id);
+
+    return res.status(200).json("Cobrança excluída com sucesso");
   } catch (error) {
     return res.status(400).json(error.message);
   }
 };
 
 const cobrancaEspecifica = async (req, res) => {
-  const { id } = req.params;
+  const { id } = req.params; // id da cobrança
 
   try {
-    const cobranca = await knex("cobranca").where({ id });
-
+    const cobranca = await knex("cobranca").where({ id }).first();
     if (!cobranca) {
-      return res.status(404).json("Não foi possível encontrar a cobrança ");
+      return res.status(404).json("Não foi possível encontrar a cobrança");
     }
 
     return res.status(200).json(cobranca);
@@ -177,12 +159,12 @@ const cobrancaEspecifica = async (req, res) => {
 };
 
 const buscarCobrancas = async (req, res) => {
-  const { busca } = req.query;
+  const { busca = "" } = req.query;
 
   try {
     let conteudo = knex("cobranca")
       .select(
-        "nome_cliente",
+        "clientes.nome_cliente",
         "cobranca.id",
         "cobranca.valor",
         "cobranca.vencimento",
@@ -194,10 +176,11 @@ const buscarCobrancas = async (req, res) => {
     if (!isNaN(Number(busca))) {
       conteudo = conteudo.whereRaw("cobranca.id::text ILIKE ?", [`${busca}%`]);
     } else {
-      conteudo = conteudo.whereILike("nome_cliente", `%${busca}%`);
+      conteudo = conteudo.whereILike("clientes.nome_cliente", `%${busca}%`);
     }
 
-    return res.status(200).json(await conteudo);
+    const resultado = await conteudo;
+    return res.status(200).json(resultado);
   } catch (error) {
     return res.status(400).json(error.message);
   }
@@ -205,76 +188,51 @@ const buscarCobrancas = async (req, res) => {
 
 const editarCobranca = async (req, res) => {
   const { cliente_id, descricao, status, valor, vencimento } = req.body;
-
-  const { id } = req.params;
+  const { id } = req.params; // id da cobrança
 
   try {
-    if (isNaN(valor)) {
-      return res.status(400).json("Este campo só aceita números.");
-    }
     await cadastrarCobrancaSchema.validate(req.body);
 
-    if (!descricao) {
-      return res.status(400).json("digite uma descrição");
+    if (isNaN(Number(valor))) {
+      return res.status(400).json("Este campo só aceita números.");
     }
 
-    if (!status) {
-      return res.status(400).json("este campo é obrigatório");
+    const cobrancaAtual = await knex("cobranca").where({ id }).first();
+    if (!cobrancaAtual) {
+      return res.status(404).json("Cobrança não encontrada");
     }
 
-    const atualizarCobranca = await knex("cobranca")
+    const clienteDestinoId = cliente_id || cobrancaAtual.cliente_id;
+    const clienteDestino = await knex("clientes").where({ id: clienteDestinoId }).first();
+    if (!clienteDestino) {
+      return res.status(404).json("Cliente não encontrado");
+    }
+
+    const statusFinal = normalizeStatusByDueDate(vencimento, status);
+    const vencimentoFinal = toEndOfDay(vencimento);
+
+    const [atualizarCobranca] = await knex("cobranca")
       .where({ id })
       .update({
-        cliente_id,
+        cliente_id: clienteDestinoId,
         descricao,
-        status:
-          new Date(
-            vencimento.split("-")[0],
-            vencimento.split("-")[1] - 1,
-            vencimento.split("-")[2],
-            23,
-            59,
-            59
-          ) < new Date() && status !== "paga"
-            ? "vencida"
-            : status,
+        status: statusFinal,
         valor,
-        vencimento: new Date(
-          vencimento.split("-")[0],
-          vencimento.split("-")[1] - 1,
-          vencimento.split("-")[2],
-          23,
-          59,
-          59
-        ),
+        vencimento: vencimentoFinal,
       })
       .returning("*");
 
-    let statusCliente =
-      new Date(
-        vencimento.split("-")[0],
-        vencimento.split("-")[1] - 1,
-        vencimento.split("-")[2],
-        23,
-        59,
-        59
-      ) < new Date() && status !== "paga"
-        ? false
-        : true;
-
-    if (!statusCliente) {
-      const clienteAtualizado = await knex("clientes")
-        .update({ status: statusCliente })
-        .where({ id: cliente_id });
+    if (!atualizarCobranca) {
+      return res.status(400).json("Não foi possível atualizar a cobrança");
     }
 
-    if (!atualizarCobranca) {
-      return res.status(400).json("Não foi possível atualizar a cobranca");
+    await atualizarStatusCliente(clienteDestinoId);
+    if (String(cobrancaAtual.cliente_id) !== String(clienteDestinoId)) {
+      await atualizarStatusCliente(cobrancaAtual.cliente_id);
     }
 
     return res.status(200).json(atualizarCobranca);
   } catch (error) {
-    console.log(error);
     return res.status(400).json(error.message);
   }
 };
