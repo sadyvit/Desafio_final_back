@@ -9,6 +9,10 @@ const { validarUsuarioLogado } = require("./filtros/filtroLogin");
 
 const rotas = express.Router();
 
+rotas.get("/", (req, res) => {
+	return res.status(200).json({ status: "ok" });
+});
+
 rotas.post("/usuario", usuarios.cadastrarUsuario);
 rotas.post("/login", login.login);
 
