@@ -1,17 +1,22 @@
-const knex = require("../bancodedados/conexao").default;
+const knex = require("../bancodedados/conexao");
 const jwt = require("jsonwebtoken");
 
 const validarUsuarioLogado = async (req, res, next) => {
   const { authorization } = req.headers;
+  const jwtSecret = process.env.SENHA_JWT || process.env.JWT_SECRET;
 
   if (!authorization) {
-    return res.status(400).json("Não autorizado");
+    return res.status(401).json("Não autorizado");
+  }
+
+  if (!jwtSecret) {
+    return res.status(500).json("Segredo JWT não configurado");
   }
 
   try {
-    const token = authorization.replace("Bearer", "").trim();
+    const token = authorization.replace(/^Bearer\s+/i, "").trim();
 
-    const { id } = jwt.verify(token, process.env.SENHA_JWT);
+    const { id } = jwt.verify(token, jwtSecret);
 
     const verificarUsuario = await knex("usuarios").where({ id }).first();
 
@@ -25,7 +30,7 @@ const validarUsuarioLogado = async (req, res, next) => {
 
     next();
   } catch (error) {
-    return res.status(400).json(error.message);
+    return res.status(401).json("Não autorizado");
   }
 };
 module.exports = {

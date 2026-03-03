@@ -1,4 +1,4 @@
-const knex = require("../bancodedados/conexao").default;
+const knex = require("../bancodedados/conexao");
 const bcrypt = require("bcrypt");
 
 const cadastroUsuarioSchema = require("../validacoes/cadastroUsuarioSchema");

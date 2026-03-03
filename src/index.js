@@ -19,7 +19,7 @@ app.use(express.json());
 app.use(cors());
 app.use(rotas);
 
-app.use((err, res, next) => {
+app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
     return res
       .status(400)
@@ -28,4 +28,8 @@ app.use((err, res, next) => {
   next();
 });
 
-app.listen(process.env.PORT || 3333);
+module.exports = app;
+
+if (require.main === module) {
+  app.listen(process.env.PORT || 3333);
+}

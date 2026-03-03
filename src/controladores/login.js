@@ -8,8 +8,13 @@ const login = async (req, res) => {
   console.log("teste de login");
 
   const { email, senha } = req.body;
+  const jwtSecret = process.env.SENHA_JWT || process.env.JWT_SECRET;
 
   try {
+    if (!jwtSecret) {
+      return res.status(500).json("Segredo JWT não configurado");
+    }
+
     await loginSchema.validate(req.body);
 
     const usuario = await knex("usuarios").where({ email }).first();
@@ -26,7 +31,7 @@ const login = async (req, res) => {
 
     const token = await jwt.sign(
       { id: usuario.id },
-      `${process.env.SENHA_JWT}`,
+      jwtSecret,
       { expiresIn: "8h" }
     );
 

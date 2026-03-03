@@ -1,4 +1,4 @@
-const knex = require("../bancodedados/conexao").default;
+const knex = require("../bancodedados/conexao");
 const cadastrarCobrancaSchema = require("../validacoes/cadastrarCobrancaSchema");
 
 const cadastrarCobranca = async (req, res) => {
